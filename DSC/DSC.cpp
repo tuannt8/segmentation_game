@@ -15,40 +15,47 @@
 //  See licence.txt for a copy of the GNU General Public License.
 
 #include "DSC.h"
-#include <thread>
 
 namespace DSC2D
-{    
+{
     DeformableSimplicialComplex::DeformableSimplicialComplex(real AVG_EDGE_LENGTH, const std::vector<real>& points, const std::vector<int>& faces, DesignDomain *domain): design_domain(domain)
     {
         set_avg_edge_length(AVG_EDGE_LENGTH);
         MIN_ANGLE = M_PI * 10./180.;
         COS_MIN_ANGLE = cos(MIN_ANGLE);
         DEG_ANGLE = 0.2*MIN_ANGLE;
-        
+
         MAX_LENGTH = 2.;
         MIN_LENGTH = 0.5;
         DEG_LENGTH = 0.2*MIN_LENGTH;
-        
+
         MAX_AREA = 5.;
+#ifdef TUAN_SEG
+        MIN_AREA = 2.;
+#else
         MIN_AREA = 0.2;
+#endif
         DEG_AREA = 0.2*MIN_AREA;
-        
+
         INTERFACE_COLOR = DARK_RED;
         CROSSING_COLOR = RED;
         OUTSIDE_COLOR = BLACK;
         DEFAULT_COLOR = DARK_BLUE;
         OUTSIDE_FACE_COLOR = INVISIBLE;
         DEFAULT_FACE_COLOR = BLUE;
-        
+
         create_simplicial_complex(points, faces);
-        
+
         destination = HMesh::VertexAttributeVector<vec2>(get_no_vertices(), vec2(0.));
         vertex_labels = HMesh::VertexAttributeVector<int>(get_no_vertices(), OUTSIDE);
         edge_labels = HMesh::HalfEdgeAttributeVector<int>(get_no_halfedges(), OUTSIDE);
         face_labels = HMesh::FaceAttributeVector<int>(get_no_faces(), OUTSIDE);
+        internal_node_forces = HMesh::VertexAttributeVector<vec2>(get_no_vertices(),
+                                                                  vec2(0.0f));
+        external_node_forces = HMesh::VertexAttributeVector<vec2>(get_no_vertices(),
+                                                                  vec2(0.0f));
     }
-    
+
     void DeformableSimplicialComplex::cleanup_attributes(HMesh::IDRemap& cleanup_map)
     {
         mesh->cleanup(cleanup_map);
@@ -56,9 +63,11 @@ namespace DSC2D
         edge_labels.cleanup(cleanup_map.hmap);
         face_labels.cleanup(cleanup_map.fmap);
         destination.cleanup(cleanup_map.vmap);
+        internal_node_forces.cleanup(cleanup_map.vmap);
+        external_node_forces.cleanup(cleanup_map.vmap);
     }
-    
-    
+
+
     HMesh::VertexAttributeVector<vec3> DeformableSimplicialComplex::get_vertex_colors() const
     {
         HMesh::VertexAttributeVector<vec3> colors = HMesh::VertexAttributeVector<vec3>();
@@ -81,7 +90,7 @@ namespace DSC2D
         }
         return colors;
     }
-    
+
     HMesh::HalfEdgeAttributeVector<vec3> DeformableSimplicialComplex::get_edge_colors() const
     {
         HMesh::HalfEdgeAttributeVector<vec3> colors = HMesh::HalfEdgeAttributeVector<vec3>();
@@ -101,7 +110,7 @@ namespace DSC2D
         }
         return colors;
     }
-    
+
     HMesh::FaceAttributeVector<vec3> DeformableSimplicialComplex::get_face_colors() const
     {
         HMesh::FaceAttributeVector<vec3> colors = HMesh::FaceAttributeVector<vec3>();
@@ -118,14 +127,14 @@ namespace DSC2D
         }
         return colors;
     }
-    
+
     void DeformableSimplicialComplex::create_simplicial_complex(const std::vector<real>& points, const std::vector<int>& faces)
     {
         mesh = new HMesh::Manifold();
         std::vector<int> temp(faces.size()/3,3);
         mesh->build(points.size()/3, &points[0], temp.size(), &temp[0], &faces[0]);
     }
-    
+
     void DeformableSimplicialComplex::validity_check()
     {
         for (auto fi = faces_begin(); fi != faces_end(); fi++) {
@@ -138,65 +147,49 @@ namespace DSC2D
             assert(area(*fi) > EPSILON);
         }
     }
-    
+
     void DeformableSimplicialComplex::fix_complex()
     {
-#ifdef PROFILE
-        auto time_ = TIME_NOW;
-        duration_t tt;
         smooth();
-        tt =TIME_NOW - time_;
-        time_profile[smooth_t] += tt.count();
 
-        time_ = TIME_NOW;
         max_min_angle();
-        tt =TIME_NOW - time_;
-        time_profile[angle_t] += tt.count();
-        
-        time_ = TIME_NOW;
-        remove_degenerate_edges();
-        tt =TIME_NOW - time_;
-        time_profile[rm_edge_t] += tt.count();
-        
-        time_ = TIME_NOW;
-        remove_degenerate_faces();
-        tt =TIME_NOW - time_;
-        time_profile[rm_face_t] += tt.count();
-        
-        time_ = TIME_NOW;
-        smooth();
-        tt =TIME_NOW - time_;
-        time_profile[smooth_t] += tt.count();
-#else
-        smooth();
-        
-        max_min_angle();
-        
+
         remove_degenerate_edges();
         remove_degenerate_faces();
-        
+
         smooth();
-#endif
     }
-    
+
     void DeformableSimplicialComplex::resize_complex()
     {
+#ifdef TUAN_SEG
         thickening_interface();
-        
-        thinning_interface();
-        
+
+      //  thinning_interface();
+
         thickening();
-        
+
         thinning();
-        
+
         fix_complex();
+#else
+        thickening_interface();
+
+        thinning_interface();
+
+        thickening();
+
+        thinning();
+
+        fix_complex();
+#endif /* TUAN_SEG */
     }
-    
+
     real DeformableSimplicialComplex::intersection_with_link(const node_key& vid, vec2 destination) const
     {
         vec2 pos = get_pos(vid);
         vec2 ray = destination - pos;
-        
+
         real min_t = INFINITY;
         for(auto hew = walker(vid); !hew.full_circle(); hew = hew.circulate_vertex_cw())
         {
@@ -211,7 +204,7 @@ namespace DSC2D
 #endif
         return min_t;
     }
-    
+
     bool DeformableSimplicialComplex::move_vertex(node_key vid)
     {
         vec2 pos = get_pos(vid);
@@ -221,32 +214,26 @@ namespace DSC2D
         {
             return true;
         }
-        
+
         real max_l = l*intersection_with_link(vid, destination) - 1e-4 * AVG_LENGTH;
         l = Util::max(Util::min(0.5*max_l, l), 0.);
         set_pos(vid, pos + l*Util::normalize(destination - pos));
-        
+
         if(Util::length(destination - get_pos(vid)) < 1e-4 * AVG_LENGTH)
         {
             return true;
         }
         return false;
     }
-    
+
+    DeformableSimplicialComplex * DeformableSimplicialComplex::clone(){
+        DeformableSimplicialComplex * new_dsc = new DeformableSimplicialComplex;
+
+        return new_dsc;
+    }
+
     void DeformableSimplicialComplex::deform()
     {
-#ifdef PROFILE
-        
-        static bool inited = false;
-        if (!inited) {
-            inited = true;
-
-            time_profile.resize(total_t);
-            std::fill(time_profile.begin(), time_profile.end(), 0.0);
-        }
-
-#endif
-        
         bool work = true;
         int count = 0;
         while(work && count < 10)
@@ -259,69 +246,52 @@ namespace DSC2D
                     work = work | !move_vertex(*vi);
                 }
             }
-            
+
             fix_complex();
             count++;
         }
-        
-#ifdef PROFILE
-        time_profile[count_t] += count;
-        time_profile[total_iter_t]++;
-        
-        auto time_ = TIME_NOW;
-        duration_t tt;
-#endif
-        
+
         resize_complex();
-        
-#ifdef PROFILE
-        tt = TIME_NOW - time_;
-        time_profile[resize_t] += tt.count();
-        time_ = TIME_NOW;
-#endif
-        
+
         HMesh::IDRemap cleanup_map;
         cleanup_attributes(cleanup_map);
-        
+
         init_attributes();
         update_attributes();
-#ifdef PROFILE
-        tt = TIME_NOW - time_;
-        time_profile[attribute_t] +=  tt.count();
-#endif
     }
-    
+
     bool DeformableSimplicialComplex::is_movable(node_key vid) const
     {
+        return !boundary(*mesh, vid) && (is_interface(vid) || is_crossing(vid));
         //return unsafe_editable(vid) && is_interface(vid);
-        return unsafe_editable(vid) && (is_interface(vid) || is_crossing(vid));
+        //return unsafe_editable(vid) && (is_interface(vid) || is_crossing(vid));
     }
-    
+
     bool DeformableSimplicialComplex::is_movable(edge_key eid) const
     {
         return unsafe_editable(eid) && is_interface(eid);
     }
-    
+
     bool DeformableSimplicialComplex::unsafe_editable(node_key vid) const
     {
         return !boundary(*mesh, vid) && !is_crossing(vid);
     }
-    
+
     bool DeformableSimplicialComplex::safe_editable(node_key vid) const
     {
         return unsafe_editable(vid) && !is_interface(vid);
     }
-    
+
     bool DeformableSimplicialComplex::unsafe_editable(edge_key eid) const
     {
         return !boundary(*mesh, eid);
     }
-    
+
     bool DeformableSimplicialComplex::safe_editable(edge_key eid) const
     {
         return unsafe_editable(eid) && !is_interface(eid);
     }
-    
+
     real DeformableSimplicialComplex::max_move_distance() const
     {
         real dist, max_dist = 0.;
@@ -335,7 +305,7 @@ namespace DSC2D
         }
         return max_dist;
     }
-    
+
     std::vector<vec2> DeformableSimplicialComplex::get_design_variable_positions()
     {
         std::vector<vec2> p;
@@ -348,7 +318,7 @@ namespace DSC2D
         }
         return p;
     }
-    
+
     std::vector<vec2> DeformableSimplicialComplex::get_interface_edge_positions()
     {
         std::vector<vec2> p;
@@ -363,17 +333,17 @@ namespace DSC2D
         }
         return p;
     }
-    
+
     vec2 DeformableSimplicialComplex::get_center()
     {
         return design_domain->get_center();
     }
-    
+
     vec2 DeformableSimplicialComplex::get_pos(node_key vid) const
     {
         return vec2(mesh->pos(vid)[0], mesh->pos(vid)[1]);
     }
-    
+
     std::vector<vec2> DeformableSimplicialComplex::get_pos(face_key fid) const
     {
         std::vector<vec2> positions;
@@ -383,12 +353,12 @@ namespace DSC2D
         }
         return positions;
     }
-    
+
     vec2 DeformableSimplicialComplex::get_destination(node_key vid) const
     {
         return vec2(destination[vid]);
     }
-    
+
     std::vector<vec2> DeformableSimplicialComplex::get_destination(face_key fid) const
     {
         std::vector<vec2> positions;
@@ -398,7 +368,7 @@ namespace DSC2D
         }
         return positions;
     }
-    
+
     std::vector<HMesh::VertexID> DeformableSimplicialComplex::get_verts(node_key vid, bool interface) const
     {
         std::vector<node_key> vids;
@@ -411,7 +381,7 @@ namespace DSC2D
         }
         return vids;
     }
-    
+
     std::vector<HMesh::VertexID> DeformableSimplicialComplex::get_verts(face_key fid) const
     {
         std::vector<node_key> vids;
@@ -421,7 +391,7 @@ namespace DSC2D
         }
         return vids;
     }
-    
+
     std::vector<HMesh::HalfEdgeID> DeformableSimplicialComplex::get_edges(face_key fid) const
     {
         std::vector<edge_key> edges;
@@ -431,7 +401,7 @@ namespace DSC2D
         }
         return edges;
     }
-    
+
     std::vector<int> DeformableSimplicialComplex::get_interface_labels(node_key vid) const
     {
         std::vector<int> labels(2,NO_LABEL);
@@ -448,13 +418,13 @@ namespace DSC2D
         }
         return labels;
     }
-    
-    
+
+
     void DeformableSimplicialComplex::set_pos(node_key vid, vec2 p)
     {
         mesh->pos(vid) = CGLA::Vec3d(p[0], p[1], 0.f);
     }
-    
+
     void DeformableSimplicialComplex::set_destination(const node_key& vid, const vec2& dest)
     {
         if(is_movable(vid))
@@ -464,30 +434,32 @@ namespace DSC2D
             destination[vid] = get_pos(vid) + vec;
         }
     }
-    
+
     void DeformableSimplicialComplex::init_attributes()
     {
         for(auto fi = faces_begin(); fi != faces_end(); ++fi)
         {
             init_attributes(*fi);
         }
-        
+
         for(auto ei = halfedges_begin(); ei != halfedges_end(); ++ei)
         {
             init_attributes(*ei);
         }
-        
+
         for(auto vi = vertices_begin(); vi != vertices_end(); ++vi)
         {
             init_attributes(*vi);
         }
     }
-    
+
     void DeformableSimplicialComplex::init_attributes(node_key vid)
     {
         destination[vid] = get_pos(vid);
+        internal_node_forces[vid] = vec2(0.0);
+        external_node_forces[vid] = vec2(0.0);
     }
-    
+
     void DeformableSimplicialComplex::init_attributes(face_key fid, int label)
     {
         if(label != NO_LABEL)
@@ -495,8 +467,8 @@ namespace DSC2D
             face_labels[fid] = label;
         }
     }
-    
-    
+
+
     void DeformableSimplicialComplex::update_attributes(node_key vid, int label)
     {
         if(label != NO_LABEL)
@@ -504,7 +476,7 @@ namespace DSC2D
             vertex_labels[vid] = label;
             return;
         }
-        
+
         int inter = 0;
         for(auto hew = walker(vid); !hew.full_circle(); hew = hew.circulate_vertex_cw())
         {
@@ -530,8 +502,8 @@ namespace DSC2D
             vertex_labels[vid] = OUTSIDE;
         }
     }
-    
-    
+
+
     void DeformableSimplicialComplex::update_attributes(edge_key heid, int fa1, int fa2)
     {
         auto hew = walker(heid);
@@ -547,7 +519,7 @@ namespace DSC2D
                 fa2 = OUTSIDE;
             }
         }
-        
+
         if (fa1 != fa2)
         {
             edge_labels[heid] = INTERFACE;
@@ -558,25 +530,25 @@ namespace DSC2D
             edge_labels[heid] = fa1;
             edge_labels[hew.opp().halfedge()] = fa1;
         }
-        
+
         update_attributes(hew.vertex());
         update_attributes(hew.opp().vertex());
     }
-    
-    
+
+
     void DeformableSimplicialComplex::update_attributes(face_key fid, int label)
     {
         if(label != NO_LABEL)
         {
             face_labels[fid] = label;
         }
-        
+
         for(auto hew = walker(fid); !hew.full_circle(); hew = hew.circulate_face_cw())
         {
             update_attributes(hew.halfedge());
         }
     }
-    
+
     void DeformableSimplicialComplex::update_locally(node_key vid)
     {
         for(auto hew = walker(vid); !hew.full_circle(); hew = hew.circulate_vertex_cw())
@@ -587,7 +559,7 @@ namespace DSC2D
             }
         }
     }
-    
+
     void DeformableSimplicialComplex::update_attributes()
     {
         for(auto fi = faces_begin(); fi != faces_end(); ++fi)
@@ -595,25 +567,26 @@ namespace DSC2D
             update_attributes(*fi);
         }
     }
-    
-    
+
+
     bool DeformableSimplicialComplex::split(edge_key eid)
     {
+
         if (!unsafe_editable(eid)) {
             return false;
         }
-        
+
         auto hew = walker(eid);
         face_key f1 = hew.face();
         node_key v1 = hew.next().vertex();
         face_key f2 = hew.opp().face();
         node_key v2 = hew.opp().next().vertex();
-        
+
         // Split
         node_key vid = mesh->split_edge(eid);
         face_key newf1 = mesh->split_face_by_edge(f1, vid, v1);
         face_key newf2 = mesh->split_face_by_edge(f2, vid, v2);
-        
+
         // Update attributes
         init_attributes(vid);
         for(auto hew = walker(vid); !hew.full_circle(); hew = hew.circulate_vertex_cw())
@@ -625,28 +598,28 @@ namespace DSC2D
         }
         init_attributes(newf1, get_label(f1));
         init_attributes(newf2, get_label(f2));
-        
+
         update_locally(vid);
         return true;
     }
-    
+
     bool DeformableSimplicialComplex::split(face_key fid)
     {
         int fa = get_label(fid);
         node_key vid = mesh->split_face_by_vertex(fid);
-        
+
         init_attributes(vid);
-        
+
         for(auto hew = walker(vid); !hew.full_circle(); hew = hew.circulate_vertex_cw())
         {
             init_attributes(hew.halfedge());
             init_attributes(hew.face(), fa);
         }
-        
+
         update_locally(vid);
         return true;
     }
-    
+
     real DeformableSimplicialComplex::min_quality(const std::vector<edge_key>& eids, const vec2& pos_old, const vec2& pos_new)
     {
         real min_q = INFINITY;
@@ -662,7 +635,7 @@ namespace DSC2D
         }
         return min_q;
     }
-    
+
     bool DeformableSimplicialComplex::is_collapsable(HMesh::Walker hew, bool safe)
     {
         if(safe)
@@ -699,18 +672,23 @@ namespace DSC2D
         }
         return false;
     }
-    
+
     bool DeformableSimplicialComplex::collapse(const edge_key& eid, bool safe)
     {
+#ifdef TUAN_SEG
+        if(is_interface(eid))
+            return false;
+#endif
+
         if (!precond_collapse_edge(*mesh, eid) || !unsafe_editable(eid))
         {
             return false;
         }
-        
+
         auto hew = walker(eid);
         bool n0_is_editable = is_collapsable(hew, safe);
         bool n1_is_editable = is_collapsable(hew.opp(), safe);
-        
+
         if (!n0_is_editable && !n1_is_editable)
         {
             return false;
@@ -727,11 +705,11 @@ namespace DSC2D
         else {
             test_weights = {0., 0.5, 1.};
         }
-        
+
         std::vector<node_key> nids = {hew.opp().vertex(), hew.vertex()};
         std::vector<face_key> e_fids = {hew.face(), hew.opp().face()};
         std::vector<edge_key> eids0, eids1;
-        
+
         for(auto hw = walker(hew.halfedge()); !hw.full_circle(); hw = hw.circulate_vertex_cw())
         {
             if(hw.face() != e_fids[0] && hw.face() != e_fids[1])
@@ -746,21 +724,21 @@ namespace DSC2D
                 eids1.push_back(hw.next().halfedge());
             }
         }
-        
+
         real q_max = -INFINITY;
         real weight;
         for (real w : test_weights)
         {
             vec2 p = (1.-w) * get_pos(nids[1]) + w * get_pos(nids[0]);
             real q = Util::min(min_quality(eids0, get_pos(nids[0]), p), min_quality(eids1, get_pos(nids[1]), p));
-            
+
             if (q > q_max && ((!is_interface(nids[0]) && !is_interface(nids[1])) || design_domain->is_inside(p)))
             {
                 q_max = q;
                 weight = w;
             }
         }
-        
+
         if(q_max > EPSILON)
         {
             if(!safe || q_max > MIN_ANGLE + EPSILON)
@@ -771,27 +749,27 @@ namespace DSC2D
         }
         return false;
     }
-    
+
     bool DeformableSimplicialComplex::collapse(HMesh::Walker hew, real weight)
     {
         node_key vid = hew.vertex();
         vec2 p = (1.-weight) * get_pos(hew.vertex()) + weight * get_pos(hew.opp().vertex());
         vec2 d = (1.-weight) * get_destination(hew.vertex()) + weight * get_destination(hew.opp().vertex());
-        
+
         update_attributes(hew.halfedge(), OUTSIDE, OUTSIDE);
         update_attributes(hew.prev().halfedge(), OUTSIDE, OUTSIDE);
         update_attributes(hew.opp().next().halfedge(), OUTSIDE, OUTSIDE);
         update_attributes(hew.next().halfedge(), OUTSIDE, OUTSIDE);
         update_attributes(hew.opp().prev().halfedge(), OUTSIDE, OUTSIDE);
         update_attributes(hew.opp().vertex(), OUTSIDE);
-        
+
         mesh->collapse_edge(hew.halfedge());
         update_locally(vid);
         set_pos(vid, p);
         set_destination(vid, d);
         return true;
     }
-    
+
     bool DeformableSimplicialComplex::collapse(const face_key& fid, bool safe)
     {
         for (auto e : sorted_face_edges(fid)) {
@@ -802,7 +780,7 @@ namespace DSC2D
         }
         return false;
     }
-    
+
     std::vector<HMesh::HalfEdgeID> DeformableSimplicialComplex::sorted_face_edges(face_key fid)
     {
         auto hew = walker(fid);
@@ -813,33 +791,33 @@ namespace DSC2D
         if(length(edges[1]) < length(edges[0])) std::swap(edges[1],edges[0]);
         if(length(edges[2]) < length(edges[1])) std::swap(edges[2],edges[1]);
         if(length(edges[1]) < length(edges[0])) std::swap(edges[1],edges[0]);
-        
+
         return edges;
     }
-    
+
     real DeformableSimplicialComplex::length(edge_key eid) const
     {
         return HMesh::length(*mesh, eid);
     }
-    
+
     real DeformableSimplicialComplex::length_new(edge_key eid) const
     {
         auto hew = walker(eid);
         return Util::length(get_destination(hew.vertex()) - get_destination(hew.opp().vertex()));
     }
-    
+
     real DeformableSimplicialComplex::min_edge_length(face_key fid)
     {
         std::vector<vec2> p = get_pos(fid);
         return Util::min(Util::min(Util::length(p[0] - p[1]), Util::length(p[1] - p[2])), Util::length(p[0] - p[2]));
     }
-    
+
     real DeformableSimplicialComplex::min_angle(face_key fid)
     {
         std::vector<vec2> p = get_pos(fid);
         return Util::min_angle(p[0], p[1], p[2]);
     }
-    
+
     void DeformableSimplicialComplex::remove_needles()
     {
         std::vector<face_key> fvec(0);
@@ -847,7 +825,7 @@ namespace DSC2D
         {
             fvec.push_back(*fi);
         }
-        
+
         for(auto &f : fvec)
         {
             auto edges = sorted_face_edges(f);
@@ -868,27 +846,21 @@ namespace DSC2D
             }
         }
     }
-    
-    void DeformableSimplicialComplex::remove_degenerate_edges(int *count)
+
+    void DeformableSimplicialComplex::remove_degenerate_edges()
     {
-        if (count) {
-            *count = 0;
-        }
         for(auto ei = halfedges_begin(); ei != halfedges_end(); ei++)
         {
-  //          if(mesh->in_use(*ei))
+            if(mesh->in_use(*ei))
             {
                 if(length(*ei) < DEG_LENGTH*AVG_LENGTH && !collapse(*ei, true))
                 {
                     collapse(*ei, false);
-                    if (count) {
-                        *count ++;
-                    }
                 }
             }
         }
     }
-    
+
     void DeformableSimplicialComplex::remove_degenerate_faces()
     {
         for(auto fi = faces_begin(); fi != faces_end(); ++fi)
@@ -902,7 +874,7 @@ namespace DSC2D
             }
         }
     }
-    
+
     void DeformableSimplicialComplex::remove_caps()
     {
         bool change = true;
@@ -920,7 +892,7 @@ namespace DSC2D
                     p1 = get_pos(hew.next().vertex());
                     p2 = get_pos(hew.opp().vertex());
                     p3 = get_pos(hew.opp().next().vertex());
-                    
+
                     if(Util::cos_angle(p0,p1,p2) < -COS_MIN_ANGLE &&
                        Util::cos_angle(p1,p2,p3) > COS_MIN_ANGLE &&
                        Util::cos_angle(p3,p0,p1) > COS_MIN_ANGLE &&
@@ -939,17 +911,17 @@ namespace DSC2D
             }
         }
     }
-    
+
     vec2 DeformableSimplicialComplex::get_barycenter(node_key vid, bool interface) const
     {
         if(interface && !is_interface(vid))
         {
             return get_pos(vid);
         }
-        
+
         vec2 avg_pos(0.);
         int n = 0;
-        
+
         for (auto hew = walker(vid); !hew.full_circle(); hew = hew.circulate_vertex_cw())
         {
             if(is_interface(hew.halfedge()) || !interface)
@@ -964,7 +936,7 @@ namespace DSC2D
 #endif
         return avg_pos/n;
     }
-    
+
     vec2 DeformableSimplicialComplex::get_barycenter(face_key fid) const
     {
         vec2 avg_pos(0.);
@@ -977,7 +949,7 @@ namespace DSC2D
 #endif
         return avg_pos/3.;
     }
-    
+
     HMesh::Walker DeformableSimplicialComplex::next_interface(HMesh::Walker hw) const
     {
         if (!is_interface(hw.halfedge())) // should only be used for interface halfedges
@@ -991,7 +963,7 @@ namespace DSC2D
         }
         return hw;
     }
-    
+
     HMesh::Walker DeformableSimplicialComplex::previous_interface(HMesh::Walker hw) const
     {
         if (!is_interface(hw.halfedge())) // should only be used for interface halfedges
@@ -1005,7 +977,7 @@ namespace DSC2D
         }
         return hw.opp();
     }
-    
+
     vec2 DeformableSimplicialComplex::filter_vertex(node_key vid, std::vector<real> &filter) const
     {
         if(!is_interface(vid)&&!is_crossing(vid))
@@ -1031,15 +1003,15 @@ namespace DSC2D
         sum_pos += 2*n*filter[0]*get_pos(vid);
         return sum_pos/(2*n);
     }
-	
-    
+
+
     vec2 DeformableSimplicialComplex::get_normal(node_key vid) const
     {
         if(!is_interface(vid))
         {
             return vec2(0.);
         }
-        
+
         vec2 n(0.f), r(0.f);
         int i = 0;
         for(auto hew = walker(vid); !hew.full_circle(); hew = hew.circulate_vertex_cw())
@@ -1068,14 +1040,14 @@ namespace DSC2D
         }
         return n;
     }
-    
+
     vec2 DeformableSimplicialComplex::get_normal_destination(node_key nid) const
     {
         if(!is_interface(nid))
         {
             return vec2(0.);
         }
-        
+
         vec2 n(0.f), r(0.f);
         int i = 0;
         for(auto hew = walker(nid); !hew.full_circle(); hew = hew.circulate_vertex_cw())
@@ -1104,17 +1076,17 @@ namespace DSC2D
         }
         return n;
     }
-    
+
     void DeformableSimplicialComplex::clamp_vector(const node_key& vid, vec2& vec) const
     {
         design_domain->clamp_vector(get_pos(vid), vec);
     }
-    
+
     real DeformableSimplicialComplex::area(face_key fid) const
     {
         return HMesh::area(*mesh, fid);
     }
-    
+
     real DeformableSimplicialComplex::area_destination(face_key fid) const
     {
         std::vector<vec2> positions = get_destination(fid);
@@ -1124,7 +1096,7 @@ namespace DSC2D
 #endif
         return A;
     }
-    
+
     void DeformableSimplicialComplex::smooth(real t)
     {
         std::vector<vec2> positions(get_no_vertices());
@@ -1145,15 +1117,15 @@ namespace DSC2D
             }
         }
     }
-    
-    
+
+
     void DeformableSimplicialComplex::thickening_interface()
     {
         if(MAX_LENGTH == INFINITY)
         {
             return;
         }
-        
+
         std::vector<edge_key> edges;
         for(auto hei = halfedges_begin(); hei != halfedges_end(); ++hei)
         {
@@ -1163,7 +1135,7 @@ namespace DSC2D
                 edges.push_back(*hei);
             }
         }
-        
+
         for (auto e : edges)
         {
             auto hew = walker(e);
@@ -1179,15 +1151,15 @@ namespace DSC2D
             }
         }
     }
-    
-    
+
+
     void DeformableSimplicialComplex::thinning_interface()
     {
         if(MIN_LENGTH <= 0.)
         {
             return;
         }
-        
+
         for(auto heit = halfedges_begin(); heit != halfedges_end(); heit++)
         {
             if(mesh->in_use(*heit))
@@ -1205,15 +1177,15 @@ namespace DSC2D
             }
         }
     }
-    
-    
+
+
     void DeformableSimplicialComplex::thickening()
     {
         if(MAX_AREA == INFINITY)
         {
             return;
         }
-        
+
         std::vector<face_key> faces;
         for(auto fi = faces_begin(); fi != faces_end(); ++fi)
         {
@@ -1222,7 +1194,7 @@ namespace DSC2D
                 faces.push_back(*fi);
             }
         }
-        
+
         for (auto f : faces)
         {
             if(area(f) > MAX_AREA*AVG_AREA)
@@ -1237,16 +1209,18 @@ namespace DSC2D
             }
         }
     }
-    
+
     void DeformableSimplicialComplex::thinning()
     {
         if(MIN_AREA <= 0.)
         {
             return;
         }
-        
+
         for(auto fi = faces_begin(); fi != faces_end(); fi++)
         {
+
+
             if(mesh->in_use(*fi) && area(*fi) < MIN_AREA*AVG_AREA)
             {
                 bool success = collapse(*fi, true);
@@ -1259,19 +1233,19 @@ namespace DSC2D
             }
         }
     }
-    
-    
+
+
     bool operator<(const DeformableSimplicialComplex::PQElem& e0, const DeformableSimplicialComplex::PQElem& e1)
     {
         return e0.pri > e1.pri;
     }
-    
-    
+
+
     void DeformableSimplicialComplex::add_to_queue(HMesh::HalfEdgeAttributeVector<int>& touched, std::priority_queue<PQElem>& Q, edge_key h, const HMesh::EnergyFun& efun)
     {
         auto w = walker(h);
         edge_key ho = w.opp().halfedge();
-        
+
         real energy = efun.delta_energy(*mesh, h);
         int t = touched[h] + 1;
         touched[h] = t;
@@ -1279,9 +1253,9 @@ namespace DSC2D
         if((energy<0) && (t < 10000)){
             Q.push(PQElem(energy, h, t));
         }
-        
+
     }
-    
+
     void DeformableSimplicialComplex::add_one_ring_to_queue(HMesh::HalfEdgeAttributeVector<int>& touched, std::priority_queue<PQElem>& Q, node_key v, const HMesh::EnergyFun& efun)
     {
         for(auto hew = walker(v); !hew.full_circle(); hew = hew.circulate_vertex_cw())
@@ -1289,28 +1263,28 @@ namespace DSC2D
             add_to_queue(touched, Q, hew.halfedge(), efun);
         }
     }
-    
+
     void DeformableSimplicialComplex::priority_queue_optimization(const HMesh::EnergyFun& efun)
     {
         HMesh::HalfEdgeAttributeVector<int> touched(get_no_halfedges(), 0);
         std::priority_queue<PQElem> Q;
-        
+
         for(auto h = halfedges_begin(); h != halfedges_end(); ++h){
             if(!touched[*h])
             {
                 add_to_queue(touched, Q, *h, efun);
             }
         }
-        
+
         while(!Q.empty())
         {
             PQElem elem = Q.top();
             Q.pop();
-            
+
             if(touched[elem.h] == elem.time && precond_flip_edge(*mesh, elem.h) && safe_editable(elem.h))
             {
                 mesh->flip_edge(elem.h);
-                
+
                 auto w = walker(elem.h);
                 add_one_ring_to_queue(touched, Q, w.vertex(), efun);
                 add_one_ring_to_queue(touched, Q, w.next().vertex(), efun);
@@ -1319,135 +1293,23 @@ namespace DSC2D
             }
         }
     }
-    
-    
+
+
     void DeformableSimplicialComplex::max_min_angle()
     {
         HMesh::MinAngleEnergy energy_fun(MIN_ANGLE);
         priority_queue_optimization(energy_fun);
     }
-    
-#pragma mark - TEST PARALLEL
-    /******************************************************************************************/
-    /* TEST PARALLEL */
-    /******************************************************************************************/
-    /**
-     Parallel laplacian smooth
-     */
-    using namespace std;
-    void thread_dsc(int index, DeformableSimplicialComplex *dsc)
-    {
-//        duration_t sl(4);
-//        std::this_thread::sleep_for(sl);
-//        return;
-        
-        
-//        //Compute new coordinate
-//        // There should be some flag tell the thread to wait
-//        {
-//            // First phase - index and 2*index
-//            dsc->smooth(2*index);
 
-//            // Sync here to make sure all done
-//            std::unique_lock<std::mutex> lck(dsc->mtx);
-//            dsc->count_finish ++;
-
-//            dsc->cv.notify_all();
-//            while (dsc->count_finish  < 2) {
-//                dsc->cv.wait(lck);
-//            }
-            
-//            // Second phase- index+1 and 2*index+1
-//            dsc->smooth(2*index+1);
-//        }
-    }
-    
-    
-    void DeformableSimplicialComplex::parallel_smooth(){
-        // Divide to 4 region
-        //
-        
-        count_finish = 0;
-        ready = false;
-        
-        positions.resize(get_no_vertices());
-        std::fill(positions.begin(), positions.end(), vec2(0.));
-        
-#ifdef PROFILE
-        auto t_ = TIME_NOW;
-        normal_smooth();
-        duration_t elap = TIME_NOW - t_;
-        std::cout << "Normal loop: " << elap.count() << " sec" << endl;
-        
-        t_ = TIME_NOW;
-        vector<thread> t;
-        
-        for (int i = 0; i < NUM_THREAD; i++) {
-            t.push_back(std::thread(thread_dsc, i, this));
-        }
-        
-        
-        
-        // Compute the coordinate
-        // Need some falg here
-        
-        // Assign new coordinate
-
-        for (int i = 0; i < NUM_THREAD; i++) {
-            t[i].join();
-        }
-        
-        elap = TIME_NOW - t_;
-        std::cout << "thread loop: " << elap.count() << " sec" << endl;
-#endif
-    }
-    
-    void DeformableSimplicialComplex::normal_smooth(){
-        int i = 0;
-        for(auto vi = vertices_begin(); vi != vertices_end(); ++vi,++i)
-        {
-            if(safe_editable(*vi))
-            {
-                positions[i] =  (get_barycenter(*vi, false) - get_pos(*vi)) + get_pos(*vi);
-            }
-        }
-    }
-    
-    void DeformableSimplicialComplex::smooth(int region){
-        
-        double left = INFINITY, right = -INFINITY;
-        std::vector<vec2> corners = get_design_domain()->get_corners();
-        for (auto p : corners) {
-            left = std::min(left, p[0]);
-            right = std::max(right, p[1]);
-        }
-        double rwidth = (right - left)/(NUM_THREAD);
-        left = left + region*rwidth;
-        right = left + rwidth;
-    
-        int i = 0;
-        for(auto vi = vertices_begin(); vi != vertices_end(); ++vi,++i)
-        {
-            auto p = get_pos(*vi);
-
-            if(p[0] >= left && p[0] < right && safe_editable(*vi))
-            {
-                positions[i] =  (get_barycenter(*vi, false) - get_pos(*vi)) + get_pos(*vi);
-            }
-        }
-        
-        // Swap pointer is faster. No, we also need to check if it is safe editable
-        // But it may be not the bottle neck
-//        i = 0;
-//        for(auto vi = vertices_begin(); vi != vertices_end(); ++vi,++i)
-//        {
-//            if(safe_editable(*vi))
-//            {
-//                set_pos(*vi, positions[i]);
-//            }
-//        }
+    void DeformableSimplicialComplex::split_edge(DeformableSimplicialComplex::edge_key ek) {
+        split(ek);
     }
 
+    void DeformableSimplicialComplex::clean_attributes() {
+        HMesh::IDRemap cleanup_map;
+        cleanup_attributes(cleanup_map);
+
+        init_attributes();
+        update_attributes();
+    }
 }
-
-
