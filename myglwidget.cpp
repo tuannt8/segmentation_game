@@ -276,22 +276,61 @@ void MyGLWidget::draw()
 //    }
 
 
-    glVertexAttribPointer(m_posAttr, 2, GL_FLOAT, GL_FALSE, 0, vptr);
-    glVertexAttribPointer(m_colAttr, 3, GL_FLOAT, GL_FALSE, 0, cptr);
+//    glVertexAttribPointer(m_posAttr, 2, GL_FLOAT, GL_FALSE, 0, vptr);
+//    glVertexAttribPointer(m_colAttr, 3, GL_FLOAT, GL_FALSE, 0, cptr);
 
-//    glVertexAttribPointer(m_posAttr, 2, GL_FLOAT, GL_FALSE, 0, vertices);
-//    glVertexAttribPointer(m_colAttr, 3, GL_FLOAT, GL_FALSE, 0, colors);
+
+//    glEnableVertexAttribArray(0);
+//    glEnableVertexAttribArray(1);
+
+//    glDrawArrays(GL_TRIANGLES, 0, obj->get_no_faces()*3);
+
+//    glDisableVertexAttribArray(1);
+//    glDisableVertexAttribArray(0);
+
+    static GLfloat edge_v[10000];
+    GLfloat edge_cl[10000];
+
+    int eidx = 0;
+    for(auto ekey : obj->halfedges()){
+        auto hew = obj->walker(ekey);
+  //      if(hew.vertex().get_index() < hew.opp().vertex().get_index())
+        {
+            Vec2 v0 = obj->get_pos(hew.vertex());
+            Vec2 v1 = obj->get_pos(hew.opp().vertex());
+            edge_v[eidx*4] = v0[0];
+            edge_v[eidx*4 + 1] = v0[1];
+            edge_v[eidx*4 + 2] = v1[0];
+            edge_v[eidx*4 + 3] = v1[1];
+
+            for(int i = 0; i < 2; i++){
+                edge_cl[eidx*6 + i*3] = 1.0;
+                edge_cl[eidx*6 + i*3 + 1] = 0.0;
+                edge_cl[eidx*6 + i*3 + 2] = 0.0;
+            }
+        }
+        eidx++;
+    }
+
+    int num = obj->get_no_halfedges();
+    cout << num;
+
+//    for(int i = 0; i < obj->get_no_halfedges(); i++){
+//        printf("%f %f %f %f %f\n", edge_v[i*2], edge_v[i*2 + 1],
+//                        edge_cl[i*3], edge_cl[i*3 + 1], edge_cl[i*3 + 2]);
+//    }
+
+    glVertexAttribPointer(m_posAttr, 2, GL_FLOAT, GL_FALSE, 0, edge_v);
+    glVertexAttribPointer(m_colAttr, 3, GL_FLOAT, GL_FALSE, 0, edge_cl);
 
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
 
-    int num = obj->get_no_faces();
-    cout << num;
-
-    glDrawArrays(GL_TRIANGLES, 0, num*3);
+    glDrawArrays(GL_LINES, 0, 2*obj->get_no_halfedges());
 
     glDisableVertexAttribArray(1);
     glDisableVertexAttribArray(0);
+
 
     m_program->release();
 
