@@ -107,6 +107,7 @@ void MyGLWidget::initializeGL()
     m_posAttr = m_program->attributeLocation("posAttr");
     m_colAttr = m_program->attributeLocation("colAttr");
     m_matrixUniform = m_program->uniformLocation("matrix");
+
 #else
     qglClearColor(Qt::black);
 
@@ -218,34 +219,34 @@ void MyGLWidget::draw()
 
     glClear(GL_COLOR_BUFFER_BIT);
 
-
     m_program->bind();
 
     QMatrix4x4 matrix;
- // matrix.perspective(60.0f, 4.0f/3.0f, 0.1f, 100.0f);
-  //  matrix.translate(0, 0, -2);
-
 
     matrix.ortho(0.0f,width(), 0.f,height(), -1, 1);
     m_program->setUniformValue(m_matrixUniform, matrix);
+
 
     GLfloat vertices[] = {
         0.0f, 0.f,
         0.0f, 100.f,
         100.0f, 0.0f,
-        100.0f, 0.f,
-        100.0f, 100.f,
-        200.0f, 0.0f
     };
 
     GLfloat colors[] = {
         1.0f, 0.0f, 0.0f,
         0.0f, 1.0f, 0.0f,
         0.0f, 0.0f, 1.0f,
-        1.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 1.0f
     };
+
+    GLfloat texts[] = {
+        0.0f, 0.f,
+        0.0f, 1.f,
+        1.0f, 0.0f
+    };
+
+
+
 
 
     auto obj = m_app_seg.get_dsc_obj();
@@ -294,7 +295,6 @@ void MyGLWidget::draw()
     int eidx = 0;
     for(auto ekey : obj->halfedges()){
         auto hew = obj->walker(ekey);
-  //      if(hew.vertex().get_index() < hew.opp().vertex().get_index())
         {
             Vec2 v0 = obj->get_pos(hew.vertex());
             Vec2 v1 = obj->get_pos(hew.opp().vertex());

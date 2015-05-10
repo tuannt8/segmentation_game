@@ -95,6 +95,7 @@ private:
     GLuint loadShader(GLenum type, const char *source);
 
     GLuint m_posAttr;
+    GLuint m_textureAttr;
     GLuint m_colAttr;
     GLuint m_matrixUniform;
 
