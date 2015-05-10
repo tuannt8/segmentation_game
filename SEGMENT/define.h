@@ -11,6 +11,7 @@
 
 #include "DSC.h"
 #include <string>
+#include <vector>
 
 
 

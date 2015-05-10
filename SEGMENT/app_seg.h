@@ -10,10 +10,10 @@ public:
     app_seg();
     ~app_seg();
 
-    int generate_dsc(int res = 5);
-
+    int generate_dsc(double width, double height, int res = 5);
+    dsc_obj & get_dsc_obj(){return *dsc_;}
 private:
-    dsc_obj *dsc_;
+    std::unique_ptr<dsc_obj> dsc_;
 };
 
 #endif // APP_H

@@ -415,6 +415,16 @@ namespace DSC2D {
             return mesh->vertices_begin();
         }
 
+        HMesh::IDIteratorPair<HMesh::Vertex> vertices() const
+        {
+            return mesh->vertices();
+        }
+        HMesh::IDIteratorPair<HMesh::Face> faces() const {
+            return mesh->faces();
+        }
+        HMesh::IDIteratorPair<HMesh::HalfEdge> halfedges() const {
+            return mesh->halfedges();
+        }
         HMesh::VertexIDIterator vertices_end() const
         {
             return mesh->vertices_end();
