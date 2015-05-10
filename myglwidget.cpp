@@ -8,11 +8,21 @@
 #include <QtGui/QOpenGLContext>
 #include <QtGui/QOpenGLPaintDevice>
 #include <QtGui/QPainter>
+#include <QOpenGLContext>
+
 
 #include "myglwidget.h"
 
+using namespace std;
+
 MyGLWidget::MyGLWidget(QWidget *parent)
     : QGLWidget(QGLFormat(QGL::SampleBuffers), parent)
+      , m_update_pending(false)
+      , m_animating(false)
+      , m_context(0)
+      , m_device(0)
+      , m_program(0)
+      , m_frame(0)
 {
     xRot = 0;
     yRot = 0;
@@ -208,57 +218,86 @@ void MyGLWidget::draw()
 
     glClear(GL_COLOR_BUFFER_BIT);
 
+
     m_program->bind();
 
     QMatrix4x4 matrix;
-    matrix.perspective(60.0f, 4.0f/3.0f, 0.1f, 100.0f);
-    matrix.translate(0, 0, -2);
+ // matrix.perspective(60.0f, 4.0f/3.0f, 0.1f, 100.0f);
+  //  matrix.translate(0, 0, -2);
+
+
+    matrix.ortho(0.0f,width(), 0.f,height(), -1, 1);
     m_program->setUniformValue(m_matrixUniform, matrix);
 
     GLfloat vertices[] = {
-        0.0f, 0.707f,
-        -0.5f, -0.5f,
-        0.5f, -0.5f
+        0.0f, 0.f,
+        0.0f, 100.f,
+        100.0f, 0.0f,
+        100.0f, 0.f,
+        100.0f, 100.f,
+        200.0f, 0.0f
     };
 
     GLfloat colors[] = {
         1.0f, 0.0f, 0.0f,
         0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 1.0f,
+        1.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f,
         0.0f, 0.0f, 1.0f
     };
 
-//    std::vector<GLfloat> face_vertices;
-//    std::vector<GLfloat> face_color;
-//    dsc_obj obj = m_app_seg.get_dsc_obj();
-//    for(auto fkey : obj.faces()){
-//        auto tris = obj.get_pos(fkey);
-//        for(auto v: tris){
-//            face_vertices.push_back(v[0]);
-//            face_vertices.push_back(v[1]);
 
-//            face_color.push_back(v[0]/600.);
-//            face_color.push_back(v[1]/600.);
-//            face_color.push_back(v[1]/600.);
-//        }
+    auto obj = m_app_seg.get_dsc_obj();
+
+    static GLfloat vptr[100000];// = new GLfloat[obj.get_no_faces()*3*2];
+    static GLfloat cptr[100000];// = new GLfloat[obj.get_no_faces()*3*3];
+
+    int idx = 0;
+    for(auto fkey : obj->faces()){
+        auto tris = obj->get_pos(fkey);
+        for(int i = 0; i < 3; i++){
+            auto v = tris[i];
+
+            vptr[idx*6 + i*2 + 0] = v[0];
+            vptr[idx*6 + i*2 + 1] = v[1];
+
+            cptr[idx*9 + i*3 + 0] = v[0]/600.f;
+            cptr[idx*9 + i*3 + 1] = v[0]/600.f;
+            cptr[idx*9 + i*3 + 2] = v[0]/600.f;
+        }
+        idx ++;
+    }
+
+
+//    for(int i = 0; i < obj.get_no_faces()*3; i++){
+//        printf("%f %f %f %f %f\n", vptr[i*2], vptr[i*2 + 1],
+//                        cptr[i*3], cptr[i*3 + 1], cptr[i*3 + 2]);
 //    }
 
-//    glVertexAttribPointer(m_posAttr, 2, GL_FLOAT, GL_FALSE, 0, &face_vertices[0]);
-//    glVertexAttribPointer(m_colAttr, 3, GL_FLOAT, GL_FALSE, 0, &face_color[0]);
 
-    glVertexAttribPointer(m_posAttr, 2, GL_FLOAT, GL_FALSE, 0, vertices);
-    glVertexAttribPointer(m_colAttr, 3, GL_FLOAT, GL_FALSE, 0, colors);
+    glVertexAttribPointer(m_posAttr, 2, GL_FLOAT, GL_FALSE, 0, vptr);
+    glVertexAttribPointer(m_colAttr, 3, GL_FLOAT, GL_FALSE, 0, cptr);
+
+//    glVertexAttribPointer(m_posAttr, 2, GL_FLOAT, GL_FALSE, 0, vertices);
+//    glVertexAttribPointer(m_colAttr, 3, GL_FLOAT, GL_FALSE, 0, colors);
 
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
 
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    int num = obj->get_no_faces();
+    cout << num;
+
+    glDrawArrays(GL_TRIANGLES, 0, num*3);
 
     glDisableVertexAttribArray(1);
     glDisableVertexAttribArray(0);
 
     m_program->release();
 
+
     ++m_frame;
+    printf("Display: %d \n", m_frame);
 #else
     qglColor(Qt::red);
     glBegin(GL_QUADS);

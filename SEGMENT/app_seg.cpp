@@ -27,8 +27,12 @@ int app_seg::generate_dsc(double width, double height, int res)
 
     DesignDomain *domain = new DesignDomain(DesignDomain::RECTANGLE, width, height, DISCRETIZATION);
 
-    dsc_ = std::unique_ptr<dsc_obj>(
+    dsc_ = std::shared_ptr<dsc_obj>(
                 new dsc_obj(DISCRETIZATION, points, faces, domain));
     return 0;
+}
+
+void app_seg::get_face_draw(GLfloat * v, GLfloat *color){
+
 }
 
